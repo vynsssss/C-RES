@@ -10,6 +10,7 @@ ACTIVE_TOOLS = {
     "hofstede":       True,    # Phase 1
     "cultural_atlas": True,    # Phase 2
     "wikipedia_rag":  True,    # Phase 3 
+}
 
 # -- Stub responses ------------------------------------------------------------
 # Returned when a tool is disabled.  Each tool has its own response format:
@@ -79,7 +80,7 @@ def get_tool_status() -> Dict[str, bool]:
 
 # -- Configuration presets -----------------------------------------------------
 PRESETS: Dict[str, Dict[str, bool]] = {
-    # C-RES-6 progressive testing
+    # C-RES progressive testing
     "phase1_hofstede_only":    {"hofstede": True,  "cultural_atlas": False, "wikipedia_rag": False},
     "phase2_hofstede_atlas":   {"hofstede": True,  "cultural_atlas": True,  "wikipedia_rag": False},
     "phase3_all_tools":        {"hofstede": True,  "cultural_atlas": True,  "wikipedia_rag": True},
