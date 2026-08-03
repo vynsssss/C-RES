@@ -1,4 +1,4 @@
-# C-RES: Code Supplement (vLLM)
+# C-RES: Code Supplement 
 
 This supplement contains the core code for **C-RES**, our study of
 *cultural overeach* in cultural-norm reasoning on NormAd-ETI. The
