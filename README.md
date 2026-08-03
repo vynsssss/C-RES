@@ -1,115 +1,102 @@
-# C-RES: Code Supplement
+# C-RES: Code Supplement (vLLM)
 
 This supplement contains the core code for **C-RES**, our study of
-*Cultural overeach* in cultural-norm reasoning on NormAd-ETI. It covers the
-full pipeline: baseline evaluation, the three evidence-retrieval paths, the
-external-knowledge (KB-grounding) reproduction, the LLM-judge that diagnoses
-*Cultural overeach*
+*cultural overeach* in cultural-norm reasoning on NormAd-ETI. The
+answer-generation pipeline uses the **vLLM** backend for batched,
+high-throughput inference across the six open-weight models.
+
+The code is provided for transparency and reproducibility. We do not
+redistribute NormAd-ETI or the external knowledge sources; paths to those
+inputs are supplied on the command line.
 
 --------------------------------------------------------------------------------
 ## Repository layout
 
 ```
-pipeline/         Step 1 baseline + Step 2 trajectory collection, prompt formatting
-coordinators/     The reasoning engines (static synthesis, agentic, ReAct, KB, KB-synth)
-tools/            The three cultural tools + tool registry/config + base classes
-judge/            Over-culturalisation LLM judge: sampling, running, parsing, validation
-prompts/          Prompt templates (verbatim from the code) and the judge rubric
+pipeline/         Step 1 baseline + Step 2 collectors (vLLM)
+coordinators/     Reasoning engines: base coordinators + their vLLM subclasses
+tools/            The three cultural tools + registry/config + base classes
+judge/            Over-culturalisation LLM judge: sampling, running, validation
+prompts/          Prompt templates and the judge rubric
 ```
+
+--------------------------------------------------------------------------------
+## Inference backend (vLLM)
+
+Generation runs through vLLM:
+
+- **Step 1** (`pipeline/step1_evaluate_baseline.py`) loads the model in-process
+  through vLLM (`LLM()` + `SamplingParams`) and generates the baseline answers
+  in batched passes.
+- **Step 2** collectors talk to a **local vLLM server** (started separately),
+  through the vLLM coordinators in `coordinators/`. Each collector takes
+  `--backend vllm`.
+
+The vLLM **coordinators** subclass the shared base coordinators and override
+only the single `generate()` call, so the tool logic, prompt construction,
+reading/synthesis flow, and trajectory format are identical to the base
+classes:
+
+- `coordinators/vllm_local_agent.py` — `LocalVLLMAgent`, the vLLM generate
+  wrapper (sampling pulled from the per-model-family table in `base_agent.py`).
+- `coordinators/vllm_coordinator.py` — `VLLMCoordinator` (static synthesis
+  path), subclass of `Coordinator`.
+- `coordinators/vllm_coordinator_extras.py` — `VLLMAgenticCoordinator`,
+  `VLLMReactCoordinator`, `VLLMKBSynthCoordinator`, subclasses of the agentic /
+  ReAct / KB-synth coordinators.
+
+The base coordinators (`coordinator.py`, `coordinator_agentic.py`, etc.) are
+included because the vLLM classes extend them; they hold the reasoning logic and
+do not themselves load any model.
+
+**Note on the KB baseline.** `pipeline/step2_kb_collect.py` reproduces the
+prior-work KB / KB-selective grounding and runs on HuggingFace `transformers`,
+not vLLM. It is a single-pass baseline separate from the C-RES vLLM pipeline,
+included here for completeness of the comparison; a header comment in the file
+states this.
 
 --------------------------------------------------------------------------------
 ## Pipeline order
 
-**Step 1 — Baseline (no evidence).**
-`pipeline/step1_evaluate_baseline.py` runs every NormAd-ETI scenario under all
-three prompt types (SC, SCV, SRoT) with no tools, establishing what each model
-knows from pre-training. Prompt strings come from
-`pipeline/prompt_formatter.py`.
-
-**Step 2 — Evidence retrieval (three paths).** Each path starts from the Step 1
-baseline and adds cultural evidence:
-- *Static synthesis* — `pipeline/step2_collect_trajectories.py` with
-  `coordinators/coordinator.py`. A reading turn compresses Cultural Atlas /
-  Wikipedia evidence to scenario-relevant points; a synthesis turn then revises
-  the answer (Hofstede passes through directly).
-- *Agentic (one-shot selection)* — `pipeline/step2_agentic_collect.py` with
-  `coordinators/coordinator_agentic.py`. The model selects 0-3 tools up front.
-- *ReAct (iterative)* — `pipeline/step2_react_collect.py` with
-  `coordinators/coordinator_react.py`. The model interleaves Thought -> Action
-  -> Observation, up to three iterations, each tool at most once.
-
-**Step 2 (KB-grounding).** The external-knowledge baseline and our variant:
-- *KB / KB-selective* — `pipeline/step2_kb_collect.py` with
-  `coordinators/coordinator_kb.py`.
-- *KB-synth (our addition)* — `pipeline/step2_kb_synth_collect.py` with
-  `coordinators/coordinator_kb_synth.py`, which routes retrieved KB evidence
-  through the same reading -> synthesis path as the static tools, so that the
-  *handling* of evidence is held constant and only the *source* differs.
-
-**Judge — over-culturalisation.**
-`judge/build_judge_sample.py` builds the per-item baseline-vs-evidence pairs;
-`judge/judge_batch_submit.py` (API judges) and `judge/judge_local_run.py`
-(open judge, Qwen3-32B) run them; `judge/judge_fetch.py` and
-`judge/judge_batch_parse.py` collect and parse the labels; and
-`judge/sample_for_annotation.py` + `judge/validate_human_agreement.py` handle
-the human-validation study.
+1. **Step 1 — baseline** (`pipeline/step1_evaluate_baseline.py`): every scenario
+   under all three prompt types (SC, SCV, SRoT), no evidence.
+2. **Step 2 — retrieval**: from the baseline, add cultural evidence via one of
+   three paths — static synthesis (`step2_collect_trajectories.py`), agentic
+   one-shot selection (`step2_agentic_collect.py`), or ReAct
+   (`step2_react_collect.py`) — plus the KB variants
+   (`step2_kb_collect.py`, `step2_kb_synth_collect.py`).
+3. **Judge** (`judge/`): score the reasoning for over-culturalisation and
+   validate against human annotation.
 
 --------------------------------------------------------------------------------
-## Knowledge base (KB-grounding)
+## Knowledge base
 
-We reproduce the prior KB-grounding baseline with an open, reproducible stack.
-`knowledge_base/build_kb.py` fuses the three sources into a single doc store
-with stable ids and source tags; `knowledge_base/build_index.py` embeds them
-and builds a FAISS index; `knowledge_base/kb_retriever.py` performs dense
-retrieval (top-5) at run time.
-
-- **Embedding model:** `Qwen/Qwen3-Embedding-4B` (native dimensionality 2560,
-  truncated to 1024 before indexing), replacing the retired
-  `textembedding-gecko@003`.
-- **Index:** FAISS (dense).
-
-The per-source counts are printed by `build_kb.py` when the index is built; use
-those printed numbers as the authoritative figures rather than any values
-quoted in comments.
+`knowledge_base/build_kb.py` fuses the sources into one doc store;
+`build_index.py` embeds them with `Qwen/Qwen3-Embedding-4B` and builds a FAISS index;
+`kb_retriever.py` performs top-5 dense retrieval. Use the per-source counts
+printed by `build_kb.py` as the authoritative figures.
 
 --------------------------------------------------------------------------------
 ## Models
 
-Six open-weight answer models are evaluated. Frontier API models are used as
-baselines and as judges. Exact checkpoints:
-
 | Paper name | Identifier |
 |------------|------------|
-| Q-4B       | `Qwen/Qwen3-4B-Instruct-2507` |
-| Q-30B      | `Qwen/Qwen3-30B-A3B-Instruct-2507` |
-| G-4B       | `google/gemma-4-E4B-it` |
-| G-31B      | `google/gemma-4-31B-it` |
-| R1-7B      | DeepSeek-R1-Distill-Qwen-7B |
-| R1-32B     | DeepSeek-R1-Distill-Qwen-32B |
+| Q-4B  | `Qwen/Qwen3-4B-Instruct-2507` |
+| Q-30B | `Qwen/Qwen3-30B-A3B-Instruct-2507` |
+| G-4B  | `google/gemma-4-E4B-it` |
+| G-31B | `google/gemma-4-31B-it` |
+| R1-7B | DeepSeek-R1-Distill-Qwen-7B |
+| R1-32B| DeepSeek-R1-Distill-Qwen-32B |
 
-The open judge is `Qwen/Qwen3-32B` (a distinct checkpoint from the answer
-models; the validation script reports its human agreement separately on
-Qwen-written vs other explanations to control for self-preference).
+The open judge is `Qwen/Qwen3-32B` (`judge/judge_local_run.py`, vLLM).
 
 --------------------------------------------------------------------------------
 ## Environment
 
 - Python 3.10+
-- Local models via HuggingFace `transformers` (large models need 2 GPUs); the
-  open judge can also run this way.
-- FAISS for the KB index; `sentence-transformers`/`transformers` for embeddings.
-- API judges/baselines via the respective providers' batch endpoints (keys read
-  from the environment).
+- `vllm` (answer models + local judge)
+- `transformers` (tokenisers/config; and the KB baseline)
+- FAISS for the KB index; `sentence-transformers`/`transformers` for embeddings
+- API judges/baselines via the providers' batch endpoints (keys from env)
 
-Inputs (NormAd-ETI, the KB source files) are not redistributed here and are
-supplied by path at the command line. Each script's module docstring gives its
-exact invocation.
-
---------------------------------------------------------------------------------
-## A note on the prompt templates
-
-The prompt templates in `prompts/PROMPTS.md` are presented as in the paper's
-appendix. The runnable code in `pipeline/` and `coordinators/` contains the
-exact strings the models received, which include a few additional formatting
-lines (an explicit numbered options block and a short "do not over-infer"
-instruction) that the appendix omits for brevity; these do not change the task.
+Paths and account names have been genericised; set them for your environment.
