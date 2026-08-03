@@ -1,0 +1,19 @@
+# Core
+torch>=2.1
+transformers>=4.44
+accelerate>=0.30
+numpy>=1.24
+pandas>=2.0
+
+# Retrieval / KB
+faiss-cpu>=1.7            # or faiss-gpu on a CUDA node
+sentence-transformers>=3.0
+
+# API judges / baselines (only if using the hosted providers)
+anthropic>=0.34
+openai>=1.40
+google-genai>=0.3
+
+# Utilities
+tqdm>=4.66
+scikit-learn>=1.3         # agreement / kappa in judge validation
